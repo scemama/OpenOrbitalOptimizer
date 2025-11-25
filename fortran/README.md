@@ -40,9 +40,17 @@ subroutine c_fock_builder(Norb, C, n, F, Etot)
   ! Total energy
   real(c_double), intent(out)           :: Etot
 
+  
 
-  ! ... compute F and Etot here ...
+  ! Transform the C matrix from the orthonormal basis to the AO basis
+  ! C_{ao} = X * C
+  
+  ! Build the AO basis Fock matrix F_{ao} and compute the total energy
 
+  ! Transform the Fock matrix from the AO basis to the orthonormal basis
+  ! F = X^T * F_{ao} * X
+  
+  
 end subroutine c_fock_builder
 ```
 
