@@ -46,6 +46,7 @@ double rhf_solve_nosym_cpp(
   if (conv > 0.0) {
     scfsolver.convergence_threshold(conv);
   }
+  scfsolver.callback_function(callback_function);
   scfsolver.initialize_with_orbitals(Cv, nv);
   scfsolver.run();
 
