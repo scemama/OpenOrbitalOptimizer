@@ -89,6 +89,8 @@ namespace OpenOrbitalOptimizer {
     std::vector<std::string> block_descriptions_;
     /// Callback function
     std::function<void(const std::map<std::string,std::any> & data)> callback_function_;
+    /// Callback function to allow calling program to judge convergence (trumps convergence_threshold_)
+    std::function<bool(const std::map<std::string,std::any> & data)> callback_convergence_function_;
 
     /** (Optional) fixed number of particles in each symmetry, affects
         the way occupations are assigned in Aufbau. These are used if
@@ -143,6 +145,9 @@ namespace OpenOrbitalOptimizer {
     Tbase initial_level_shift_ = 1.0;
     /// Level shift diminution factor
     Tbase level_shift_factor_ = 2.0;
+
+    /// Internal holder for computing deltaE
+    Tbase old_energy_ = 0.0;
 
     /* Internal functions */
     /// Is the block empty?
@@ -439,7 +444,9 @@ namespace OpenOrbitalOptimizer {
       // matrix such that the last diagonal element is one; Eckert et
       // al, J. Comput. Chem 18. 1473-1483 (1997)
       arma::Col<Tbase> Bdiag(arma::diagvec(B));
-      B.submat(0,0,N-1,N-1) /= arma::min(Bdiag.subvec(0,N-1));
+      Tbase diagmin = arma::min(Bdiag.subvec(0,N-1));
+      if(diagmin != 0.0)
+        B.submat(0,0,N-1,N-1) /= diagmin;
 
       // Right-hand side of equation is
       arma::Col<Tbase> rh(N+1, arma::fill::zeros);
@@ -1702,7 +1709,7 @@ namespace OpenOrbitalOptimizer {
       return convergence_threshold_;
     }
 
-    /// Set verbosity
+    /// Set convergence threshold (unused if callback_convergence_function set)
     void convergence_threshold(Tbase convergence_threshold) {
       convergence_threshold_ = convergence_threshold;
     }
@@ -1999,12 +2006,22 @@ namespace OpenOrbitalOptimizer {
 
     /// Check if we are converged
     bool converged() const {
-      return norm(diis_error_vector(0)) <= convergence_threshold_;
+        if(callback_convergence_function_) {
+
+            // Data to pass to callback function
+            std::map<std::string, std::any> callback_data;
+            callback_data["dE"] = get_energy() - old_energy_;
+            callback_data["diis_error"] = norm(diis_error_vector(0));
+
+            return callback_convergence_function_(callback_data);
+        } else {
+            return norm(diis_error_vector(0)) <= convergence_threshold_;
+        }
     }
 
     /// Run the SCF
     void run() {
-      Tbase old_energy = 0.0;
+      old_energy_ = 0.0;
       // Number of consecutive steps that the procedure failed to decrease the energy
       int failed_iterations = 0;
       size_t noda_steps = 0;
@@ -2012,14 +2029,14 @@ namespace OpenOrbitalOptimizer {
         // Compute DIIS error
         Tbase diis_error = norm(diis_error_vector(0));
         Tbase diis_max_error = arma::norm(diis_error_vector(0),"inf");
-        Tbase dE = get_energy() - old_energy;
+        Tbase dE = get_energy() - old_energy_;
 
         // Data to pass to callback function
         std::map<std::string, std::any> callback_data;
         callback_data["iter"] = iteration;
         callback_data["nfock"] = number_of_fock_evaluations_;
         callback_data["E"] = get_energy();
-        callback_data["dE"] = get_energy() - old_energy;
+        callback_data["dE"] = get_energy() - old_energy_;
         callback_data["diis_error"] = diis_error;
         callback_data["diis_max_error"] = diis_max_error;
 
@@ -2064,12 +2081,16 @@ namespace OpenOrbitalOptimizer {
             // The orbitals are so bad we can't trust A/EDIIS or DIIS
             noda_steps = 1;
           }
+          if(frozen_occupations_) {
+            // Don't let ODA overwrite frozen occs
+            noda_steps = 0;
+          }
         }
 
         // Do ODA if necessary
         if(noda_steps>0) {
           noda_steps--;
-          old_energy = get_energy();
+          old_energy_ = get_energy();
           if(verbosity_>=5) {
             if(diis_max_error >= optimal_damping_threshold_)
               printf("Optimal damping step due to large DIIS max error %e\n", diis_max_error);
@@ -2111,7 +2132,7 @@ namespace OpenOrbitalOptimizer {
             callback_function_(callback_data);
 
           // Perform extrapolation.
-          old_energy = get_energy();
+          old_energy_ = get_energy();
           if(!attempt_extrapolation(weights)) {
             if(verbosity_>=10) printf("Warning: did not go down in energy!\n");
             // Increment number of consecutive failed iterations
@@ -2128,12 +2149,12 @@ namespace OpenOrbitalOptimizer {
 
     /// Run optimal damping
     void run_optimal_damping() {
-      Tbase old_energy = 0.0;
+      old_energy_ = 0.0;
       for(size_t iteration=1; iteration <= maximum_iterations_; iteration++) {
         // Compute DIIS error
         Tbase diis_error = norm(diis_error_vector(0));
         Tbase diis_max_error = arma::norm(diis_error_vector(0),"inf");
-        Tbase dE = get_energy() - old_energy;
+        Tbase dE = get_energy() - old_energy_;
 
         if(verbosity_>=5) {
           printf("\n\n");
@@ -2147,7 +2168,7 @@ namespace OpenOrbitalOptimizer {
         callback_data["iter"] = iteration;
         callback_data["nfock"] = number_of_fock_evaluations_;
         callback_data["E"] = get_energy();
-        callback_data["dE"] = get_energy() - old_energy;
+        callback_data["dE"] = get_energy() - old_energy_;
         callback_data["diis_error"] = diis_error;
         callback_data["diis_max_error"] = diis_max_error;
         callback_data["step"] = std::string("ODA");
@@ -2167,7 +2188,7 @@ namespace OpenOrbitalOptimizer {
         if(callback_function_)
           callback_function_(callback_data);
 
-        old_energy = get_energy();
+        old_energy_ = get_energy();
         if(not optimal_damping_step())
           throw std::logic_error("Could not find descent step!\n");
 
@@ -2423,6 +2444,10 @@ namespace OpenOrbitalOptimizer {
 
     void callback_function(std::function<void(const std::map<std::string,std::any> &)> callback_function = nullptr) {
       callback_function_ = callback_function;
+    }
+
+    void callback_convergence_function(std::function<bool(const std::map<std::string,std::any> &)> callback_convergence_function = nullptr) {
+      callback_convergence_function_ = callback_convergence_function;
     }
   };
 }
