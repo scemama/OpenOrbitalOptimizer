@@ -54,7 +54,7 @@ orbitals and occupation numbers and return them through `F` and `Etot`.
 You may also supply a callback function that the library will invoke at each
 SCF iteration, allowing custom output formatting. An example is:
 
-```
+```fortran
 subroutine c_print_callback(handle)
   use OpenOrbitalOptimizer
   use iso_c_binding 
